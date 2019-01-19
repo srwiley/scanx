@@ -40,19 +40,14 @@ func SaveToPngFile(filePath string, m image.Image) error {
 
 func CompareSpanners(t *testing.T, img1, img2 image.Image, width, height int, op draw.Op) {
 
-	icon, errSvg := oksvg.ReadIcon("testdata/landscapeIcons/beach.svg", oksvg.WarnErrorMode)
+	icon, errSvg := oksvg.ReadIcon("testdata/landscapeIcons/sea.svg", oksvg.WarnErrorMode)
+	//icon, errSvg := oksvg.ReadIcon("testdata/TestShapes.svg", oksvg.WarnErrorMode)
 	if errSvg != nil {
 		fmt.Println("cannot read icon")
 		log.Fatal("cannot read icon", errSvg)
 		t.FailNow()
 	}
 	icon.SetTarget(float64(0), float64(0), float64(width), float64(height))
-
-	spanner := scanx.NewImgSpanner(img1)
-	spanner.Op = op
-	scannerX := scanx.NewScanner(spanner, width, height)
-	rasterScanX := rasterx.NewDasher(width, height, scannerX)
-	icon.Draw(rasterScanX, 1.0)
 
 	spannerC := &scanx.CompressSpanner{}
 	spannerC.Op = op
@@ -62,9 +57,16 @@ func CompareSpanners(t *testing.T, img1, img2 image.Image, width, height int, op
 	icon.Draw(rasterScanC, 1.0)
 	spannerC.DrawToImage(img2)
 
-	//SaveToPngFile("testdata/imgc.png ", ximgc)
-	//SaveToPngFile("testdata/imgx.png ", ximgx)
+	spanner := scanx.NewImgSpanner(img1)
+	spanner.Op = op
+	scannerX := scanx.NewScanner(spanner, width, height)
+	rasterScanX := rasterx.NewDasher(width, height, scannerX)
+	icon.Draw(rasterScanX, 1.0)
+
+	SaveToPngFile("testdata/imgi.png ", img1)
+	SaveToPngFile("testdata/imgc.png ", img2)
 	var pix1 []uint8
+
 	switch img1 := img1.(type) {
 	case *xgraphics.Image:
 		pix1 = img1.Pix
@@ -72,29 +74,48 @@ func CompareSpanners(t *testing.T, img1, img2 image.Image, width, height int, op
 		pix1 = img1.Pix
 	}
 	var pix2 []uint8
-	switch img2 := img1.(type) {
+	var stride int
+	switch img2 := img2.(type) {
 	case *xgraphics.Image:
 		pix2 = img2.Pix
+		stride = img2.Stride
 	case *image.RGBA:
 		pix2 = img2.Pix
+		stride = img2.Stride
 	}
 
-	for i := 0; i < len(pix1); i++ {
-		if pix1[i] != pix2[i] {
-			t.Error("images do not match at index ", i, pix1[i], pix2[i])
-			t.FailNow()
+	if len(pix1) == 0 {
+		t.Error("images are zero sized ")
+		t.FailNow()
+	}
+	i0 := 0
+	for y := 0; y < img2.Bounds().Max.Y; y++ {
+		i0 = y * stride
+		for x := 0; x < img2.Bounds().Max.X; x += 4 {
+			if pix1[i0+x] != pix2[i0+x] || pix1[i0+x+1] != pix2[i0+x+1] || pix1[i0+x+2] != pix2[i0+x+2] || pix1[i0+x+3] != pix2[i0+x+3] {
+				t.Error("images do not match at index ", y, x/4, "c1", pix1[i0+x], pix1[i0+x+1], pix1[i0+x+2], pix1[i0+x+3],
+					"c2", pix2[i0+x], pix2[i0+x+1], pix2[i0+x+2], pix2[i0+x+3])
+				t.FailNow()
+			}
 		}
 	}
+	// for i := 0; i < len(pix1); i++ {
+	// 	if pix1[i] != pix2[i] {
+	// 		t.Error("images do not match at index ", i, pix1[i], pix2[i])
+	// 		t.FailNow()
+	// 	}
+	// }
 }
 
 func TestSpannersImg(t *testing.T) {
 	width := 400
 	height := 350
-
 	ximgx := image.NewRGBA(image.Rect(0, 0, width, height))
 	ximgc := image.NewRGBA(image.Rect(0, 0, width, height))
-	CompareSpanners(t, ximgx, ximgc, width, height, draw.Over)
 	CompareSpanners(t, ximgx, ximgc, width, height, draw.Src)
+	ximgx = image.NewRGBA(image.Rect(0, 0, width, height))
+	ximgc = image.NewRGBA(image.Rect(0, 0, width, height))
+	CompareSpanners(t, ximgx, ximgc, width, height, draw.Over)
 
 }
 
@@ -104,11 +125,20 @@ func TestSpannersX(t *testing.T) {
 
 	ximgx := xgraphics.New(nil, image.Rect(0, 0, width, height))
 	ximgc := xgraphics.New(nil, image.Rect(0, 0, width, height))
-
-	CompareSpanners(t, ximgx, ximgc, width, height, draw.Over)
 	CompareSpanners(t, ximgx, ximgc, width, height, draw.Src)
 
+	ximgx = xgraphics.New(nil, image.Rect(0, 0, width, height))
+	ximgc = xgraphics.New(nil, image.Rect(0, 0, width, height))
+	CompareSpanners(t, ximgx, ximgc, width, height, draw.Over)
+
 }
+
+// func TestCompose(t *testing.T) {
+// 	spannerC := &scanx.CompressSpanner{}
+// 	spannerC.SetBounds(image.Rect(0, 0, 10, 10))
+// 	spannerC.TestSpanAdd()
+
+// }
 
 // func TestCompose(t *testing.T) {
 // 	sp := &scanx.CompressSpanner{}
@@ -189,4 +219,37 @@ func TestSpannersX(t *testing.T) {
 
 // 	sp.SpanOver(0, 10, 60, m)
 // 	drawList(0)
+// }
+
+// func (x *CompressSpanner) CheckList(y int, m string) {
+// 	cntr := 0
+// 	p := x.spans[y].next
+// 	for p != 0 {
+// 		spCell := x.spans[p]
+// 		//fmt.Print(" sp", spCell)
+// 		p = spCell.next
+// 		if p != 0 {
+// 			snCell := x.spans[p]
+// 			if spCell.x1 > snCell.x0 {
+// 				fmt.Println("bad list at ", y, ":", m)
+// 				x.DrawList(y)
+// 				os.Exit(1)
+// 			}
+// 		}
+// 		cntr++
+// 	}
+// }
+
+// //DrawList draws the linked list y
+// func (x *CompressSpanner) DrawList(y int) {
+// 	fmt.Print("list at ", y, ":")
+// 	cntr := 0
+// 	p := x.spans[y].next
+// 	for p != 0 {
+// 		spCell := x.spans[p]
+// 		fmt.Print(" ", p, ":sp", spCell)
+// 		p = spCell.next
+// 		cntr++
+// 	}
+// 	fmt.Println(" length", cntr)
 // }

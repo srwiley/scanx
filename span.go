@@ -9,6 +9,8 @@ import (
 	"github.com/srwiley/rasterx"
 )
 
+const m = 1<<16 - 1
+
 type (
 	spanCell struct {
 		x0, x1, next int
@@ -147,36 +149,41 @@ func (x *CompressSpanner) SetBounds(bounds image.Rectangle) {
 }
 
 func (x *CompressSpanner) blendColor(under color.RGBA, ma uint32) color.RGBA {
+	if ma == 0 {
+		return under
+	}
 	rma := uint32(x.fgColor.R) * ma
 	gma := uint32(x.fgColor.G) * ma
 	bma := uint32(x.fgColor.B) * ma
 	ama := uint32(x.fgColor.A) * ma
 
-	if x.Op != draw.Over || under.A == 0 || ama == 0xFFFF*0xFFFF {
+	if x.Op != draw.Over || under.A == 0 || ama == m*0xFF {
 		return color.RGBA{
-			uint8(rma / m >> 4),
-			uint8(gma / m >> 4),
-			uint8(bma / m >> 4),
-			uint8(ama / m >> 4)}
+			uint8(rma / 0xFF00),
+			uint8(gma / 0xFF00),
+			uint8(bma / 0xFF00),
+			uint8(ama / 0xFF00)}
 	}
-	a := (m - (ama / m)) // * 0x101
-	return color.RGBA{
-		uint8((uint32(under.R)*a + rma) / m >> 4),
-		uint8((uint32(under.G)*a + gma) / m >> 4),
-		uint8((uint32(under.B)*a + bma) / m >> 4),
-		uint8((uint32(under.A)*a + ama) / m >> 4)}
+	a := m - (ama / (m >> 8))
+	cc := color.RGBA{
+		uint8((uint32(under.R)*a + rma) / 0xFF00),
+		uint8((uint32(under.G)*a + gma) / 0xFF00),
+		uint8((uint32(under.B)*a + bma) / 0xFF00),
+		uint8((uint32(under.A)*a + ama) / 0xFF00)}
+	return cc
 }
 
-func (x *CompressSpanner) addLink(x0, x1, next, pp int, underColor color.RGBA, alpha uint32) int {
+func (x *CompressSpanner) addLink(x0, x1, next, pp int, underColor color.RGBA, alpha uint32) (p int) {
 	clr := x.blendColor(underColor, alpha)
-	if x.spans[pp].x1 >= x0 && ((clr.A == 0 && x.spans[pp].clr.A == 0) || clr == x.spans[pp].clr) { // Just extend the prev span; a new one is not required
+	if pp >= x.bounds.Dy() && x.spans[pp].x1 >= x0 && ((clr.A == 0 && x.spans[pp].clr.A == 0) || clr == x.spans[pp].clr) {
+		// Just extend the prev span; a new one is not required
 		x.spans[pp].x1 = x1
 		return pp
 	}
-	x.spans = append(x.spans,
-		spanCell{x0: x0, x1: x1, next: next, clr: clr})
-	x.spans[pp].next = len(x.spans) - 1
-	return len(x.spans) - 1
+	x.spans = append(x.spans, spanCell{x0: x0, x1: x1, next: next, clr: clr})
+	p = len(x.spans) - 1
+	x.spans[pp].next = p
+	return
 }
 
 // GetSpanFunc returns the function that consumes a span described by the parameters.
@@ -184,14 +191,16 @@ func (x *CompressSpanner) GetSpanFunc() SpanFunc {
 	return x.SpanOver
 }
 
-//SpanOver compresses using a solid color and Porter-Duff composition
+//SpanOver adds the span into an array of linked lists of spans using the fgColor and Porter-Duff composition
+// ma is the accumulated alpha coverage.
 func (x *CompressSpanner) SpanOver(yi, xi0, xi1 int, ma uint32) {
-	if yi != x.lastY {
+	if yi != x.lastY { // If the y place has changed, start at the list beginning
 		x.lastP = yi
 		x.lastY = yi
 	}
+	// since spans are sorted, we can start from x.lastP
 	pp := x.lastP
-	p := x.spans[pp].next // first 	qindex  according to local y value
+	p := x.spans[pp].next
 	for p != 0 && xi0 < xi1 {
 		sp := x.spans[p]
 		if sp.x1 <= xi0 { //sp is before new span
@@ -213,27 +222,30 @@ func (x *CompressSpanner) SpanOver(yi, xi0, xi1 int, ma uint32) {
 		}
 
 		clr := x.blendColor(sp.clr, ma)
-		sameClrs := ((clr.A == 0 && x.spans[pp].clr.A == 0) || clr == x.spans[pp].clr)
-		if xi1 < sp.x1 {
-			// middle span; replaces sp
+		sameClrs := pp >= x.bounds.Dy() && ((clr.A == 0 && x.spans[pp].clr.A == 0) || clr == x.spans[pp].clr)
+		if xi1 < sp.x1 { // span does not go beyond sp
+			// merge with left span
 			if x.spans[pp].x1 >= xi0 && sameClrs {
 				x.spans[pp].x1 = xi1
 				x.spans[pp].next = sp.next
+				x.lastP = yi //We need to go back, so let's just go to start of the list next time
+				p = pp
 			} else {
+				// middle span; replaces sp
 				x.spans[p] = spanCell{x0: xi0, x1: xi1, next: sp.next, clr: clr}
-				//right span extends beyond xi1
+				x.lastP = pp
 			}
 			x.addLink(xi1, sp.x1, sp.next, p, sp.clr, 0)
-			x.lastP = p //sp.next
 			return
 		}
-		// middle span; replaces sp
-		if x.spans[pp].x1 >= xi0 && sameClrs {
+		if x.spans[pp].x1 >= xi0 && sameClrs { // Extend and merge with previous
 			x.spans[pp].x1 = sp.x1
 			x.spans[pp].next = sp.next
-			p = sp.next
+			p = sp.next // clip out the current span from the list
+			xi0 = sp.x1 // set remaining to start for next loop
 			continue
 		}
+		// Set current span to start of new span and combined color
 		x.spans[p] = spanCell{x0: xi0, x1: sp.x1, next: sp.next, clr: clr}
 		xi0 = sp.x1 // any remaining span starts at sp.x1
 		pp = p
@@ -283,7 +295,7 @@ func (x *ImgSpanner) SetColor(c interface{}) {
 	switch c := c.(type) {
 	case color.Color:
 		x.colorFunc = nil
-		r, g, b, a := x.fgColor.RGBA()
+		r, g, b, a := c.RGBA()
 		if x.xpixel == true { // apparently r and b values swap in xgraphics.Image
 			r, b = b, r
 		}
@@ -318,8 +330,6 @@ func (x *ImgSpanner) GetSpanFunc() SpanFunc {
 	}
 }
 
-const m = 1<<16 - 1
-
 //SpanColorFuncR draw the span using a colorFunc and replaces the previous values.
 func (x *ImgSpanner) SpanColorFuncR(yi, xi0, xi1 int, ma uint32) {
 	i0 := (yi)*x.stride + (xi0)*4
@@ -331,10 +341,10 @@ func (x *ImgSpanner) SpanColorFuncR(yi, xi0, xi1 int, ma uint32) {
 			rcr, rcb = rcb, rcr
 		}
 		cx++
-		x.pix[i+0] = uint8(rcr * ma / m >> 8)
-		x.pix[i+1] = uint8(rcg * ma / m >> 8)
-		x.pix[i+2] = uint8(rcb * ma / m >> 8)
-		x.pix[i+3] = uint8(rca * ma / m >> 8)
+		x.pix[i+0] = uint8(rcr * ma / (m * 0x100))
+		x.pix[i+1] = uint8(rcg * ma / (m * 0x100))
+		x.pix[i+2] = uint8(rcb * ma / (m * 0x100))
+		x.pix[i+3] = uint8(rca * ma / (m * 0x100))
 	}
 }
 
@@ -343,16 +353,15 @@ func (x *ImgSpanner) SpanFgColorR(yi, xi0, xi1 int, ma uint32) {
 	i0 := (yi)*x.stride + (xi0)*4
 	i1 := i0 + (xi1-xi0)*4
 	cr, cg, cb, ca := x.fgColor.RGBA()
-	rma := cr * ma
-	gma := cg * ma
-	bma := cb * ma
-	ama := ca * ma
+	rma := uint8(cr * ma / (m * 0x100))
+	gma := uint8(cg * ma / (m * 0x100))
+	bma := uint8(cb * ma / (m * 0x100))
+	ama := uint8(ca * ma / (m * 0x100))
 	for i := i0; i < i1; i += 4 {
-		x.pix[i+0] = uint8(rma / m >> 8)
-		x.pix[i+1] = uint8(gma / m >> 8)
-		x.pix[i+2] = uint8(bma / m >> 8)
-		x.pix[i+3] = uint8(ama / m >> 8)
-
+		x.pix[i+0] = rma
+		x.pix[i+1] = gma
+		x.pix[i+2] = bma
+		x.pix[i+3] = ama
 	}
 }
 
@@ -374,10 +383,10 @@ func (x *ImgSpanner) SpanColorFunc(yi, xi0, xi1 int, ma uint32) {
 		dg := uint32(x.pix[i+1])
 		db := uint32(x.pix[i+2])
 		da := uint32(x.pix[i+3])
-		x.pix[i+0] = uint8((dr*a + rcr*ma) / m >> 8)
-		x.pix[i+1] = uint8((dg*a + rcg*ma) / m >> 8)
-		x.pix[i+2] = uint8((db*a + rcb*ma) / m >> 8)
-		x.pix[i+3] = uint8((da*a + rca*ma) / m >> 8)
+		x.pix[i+0] = uint8((dr*a + rcr*ma) / (m * 0x100))
+		x.pix[i+1] = uint8((dg*a + rcg*ma) / (m * 0x100))
+		x.pix[i+2] = uint8((db*a + rcb*ma) / (m * 0x100))
+		x.pix[i+3] = uint8((da*a + rca*ma) / (m * 0x100))
 	}
 }
 
@@ -387,24 +396,28 @@ func (x *ImgSpanner) SpanFgColor(yi, xi0, xi1 int, ma uint32) {
 	i1 := i0 + (xi1-xi0)*4
 	// uses the Porter-Duff composition operator.
 	cr, cg, cb, ca := x.fgColor.RGBA()
-	rma := cr * ma
-	gma := cg * ma
-	bma := cb * ma
 	ama := ca * ma
 	if ama == 0xFFFF*0xFFFF { // undercolor is ignored
+		rmb := uint8(cr * ma / (m * 0x100))
+		gmb := uint8(cg * ma / (m * 0x100))
+		bmb := uint8(cb * ma / (m * 0x100))
+		amb := uint8(ama / (m * 0x100))
 		for i := i0; i < i1; i += 4 {
-			x.pix[i+0] = uint8(rma / m >> 8)
-			x.pix[i+1] = uint8(gma / m >> 8)
-			x.pix[i+2] = uint8(bma / m >> 8)
-			x.pix[i+3] = uint8(ama / m >> 8)
+			x.pix[i+0] = rmb
+			x.pix[i+1] = gmb
+			x.pix[i+2] = bmb
+			x.pix[i+3] = amb
 		}
 		return
 	}
+	rma := cr * ma
+	gma := cg * ma
+	bma := cb * ma
 	a := (m - (ama / m)) * 0x101
 	for i := i0; i < i1; i += 4 {
-		x.pix[i+0] = uint8((uint32(x.pix[i+0])*a + rma) / m >> 8)
-		x.pix[i+1] = uint8((uint32(x.pix[i+1])*a + gma) / m >> 8)
-		x.pix[i+2] = uint8((uint32(x.pix[i+2])*a + bma) / m >> 8)
-		x.pix[i+3] = uint8((uint32(x.pix[i+3])*a + ama) / m >> 8)
+		x.pix[i+0] = uint8((uint32(x.pix[i+0])*a + rma) / (m * 0x100))
+		x.pix[i+1] = uint8((uint32(x.pix[i+1])*a + gma) / (m * 0x100))
+		x.pix[i+2] = uint8((uint32(x.pix[i+2])*a + bma) / (m * 0x100))
+		x.pix[i+3] = uint8((uint32(x.pix[i+3])*a + ama) / (m * 0x100))
 	}
 }
