@@ -9,12 +9,12 @@ CompressSpanner supports the same Image types as ImgSpanner, but stores the span
 
 # Example using ImgSpanner:
 ```golang
-                bounds     = image.Rect(0, 0, w, h)
-		img        = image.NewRGBA(bounds)
-		spanner     = scanx.NewImgSpanner(img)
-		scanner    = scanx.NewScanner(spanner, w, h)
-		raster = rasterx.NewDasher(w, h, scanner)
-    //Use the raster to draw and the results go to the img
+bounds     = image.Rect(0, 0, w, h)
+img        = image.NewRGBA(bounds)
+spanner     = scanx.NewImgSpanner(img)
+scanner    = scanx.NewScanner(spanner, w, h)
+raster = rasterx.NewDasher(w, h, scanner)
+//Use the raster to draw and the results go to the img
 ``` 
 # Example using CompressSpanner:
 ```golang  
