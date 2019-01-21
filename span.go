@@ -29,7 +29,7 @@ type (
 	// interface satisfying struct but it is optimized for *xgraphics.Image
 	// and *image.RGBA image types
 	// It uses a solid Color only for fg and bg and does not support a color function
-	// used by gradients
+	// used by gradients.
 	CompressSpanner struct {
 		baseSpanner
 		spans        []spanCell
@@ -52,31 +52,6 @@ type (
 		colorFunc rasterx.ColorFunc
 	}
 )
-
-// SetFgColor sets the foreground color for blending
-func (x *CompressSpanner) SetFgColor(c interface{}) {
-	x.fgColor = getColorRGBA(c)
-}
-
-// SetBgColor sets the background color for blending
-func (x *CompressSpanner) SetBgColor(c interface{}) {
-	x.bgColor = getColorRGBA(c)
-}
-
-func getColorRGBA(c interface{}) (rgba color.RGBA) {
-	switch c := c.(type) {
-	case *color.RGBA:
-		rgba = *c // direct method why not
-	case color.Color:
-		r, g, b, a := c.RGBA()
-		rgba = color.RGBA{
-			R: uint8(r >> 8),
-			G: uint8(g >> 8),
-			B: uint8(b >> 8),
-			A: uint8(a >> 8)}
-	}
-	return
-}
 
 //Clear clears the current spans
 func (x *CompressSpanner) Clear() {
@@ -148,6 +123,19 @@ func (x *CompressSpanner) SetBounds(bounds image.Rectangle) {
 	x.Clear()
 }
 
+func getColorRGBA(c interface{}) (rgba color.RGBA) {
+	switch c := c.(type) {
+	case color.Color:
+		r, g, b, a := c.RGBA()
+		rgba = color.RGBA{
+			R: uint8(r >> 8),
+			G: uint8(g >> 8),
+			B: uint8(b >> 8),
+			A: uint8(a >> 8)}
+	}
+	return
+}
+
 func (x *CompressSpanner) blendColor(under color.RGBA, ma uint32) color.RGBA {
 	if ma == 0 {
 		return under
@@ -156,7 +144,6 @@ func (x *CompressSpanner) blendColor(under color.RGBA, ma uint32) color.RGBA {
 	gma := uint32(x.fgColor.G) * ma
 	bma := uint32(x.fgColor.B) * ma
 	ama := uint32(x.fgColor.A) * ma
-
 	if x.Op != draw.Over || under.A == 0 || ama == m*0xFF {
 		return color.RGBA{
 			uint8(rma / 0xFF00),
@@ -209,8 +196,7 @@ func (x *CompressSpanner) SpanOver(yi, xi0, xi1 int, ma uint32) {
 			continue
 		}
 		if sp.x0 >= xi1 { //new span is before sp
-			x.addLink(xi0, xi1, p, pp, x.bgColor, ma)
-			x.lastP = x.spans[pp].next
+			x.lastP = x.addLink(xi0, xi1, p, pp, x.bgColor, ma)
 			return
 		}
 		// left span
@@ -228,7 +214,8 @@ func (x *CompressSpanner) SpanOver(yi, xi0, xi1 int, ma uint32) {
 			if x.spans[pp].x1 >= xi0 && sameClrs {
 				x.spans[pp].x1 = xi1
 				x.spans[pp].next = sp.next
-				x.lastP = yi //We need to go back, so let's just go to start of the list next time
+				// Suffices not to advance lastP ?!? Testing says yes.
+				//x.lastP = yi //We need to go back, so let's just go to start of the list next time
 				p = pp
 			} else {
 				// middle span; replaces sp
@@ -257,13 +244,14 @@ func (x *CompressSpanner) SpanOver(yi, xi0, xi1 int, ma uint32) {
 	}
 }
 
-// SetColor sets the color of x to either a color.Color or a rasterx.ColorFunction
+// SetBgColor sets the background color for blending
+func (x *CompressSpanner) SetBgColor(c interface{}) {
+	x.bgColor = getColorRGBA(c)
+}
+
+// SetColor sets the color of x if it is a color.Color and ignores a rasterx.ColorFunction
 func (x *CompressSpanner) SetColor(c interface{}) {
-	switch c := c.(type) {
-	case color.Color:
-		r, g, b, a := c.RGBA()
-		x.fgColor = color.RGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), uint8(a >> 8)}
-	}
+	x.fgColor = getColorRGBA(c)
 }
 
 // NewImgSpanner returns an ImgSpanner set to draw to the img.
