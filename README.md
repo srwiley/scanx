@@ -1,4 +1,7 @@
 # scanx
+
+Warning: Scanx is pre-alpha. There are known bugs being worked on. Please use scanFT or scanGV unless you want to test each svg file your application may use.
+
 Scanx is a fast antialiaser supporting the draw.Image interface and image.RGBA and xgraphics.Image types in particular. It is intended for use with the rasterx package.
 
 Scanx replaces the Painter interface with the Spanner interface that allows for more direct writing to an underlying image type. Scanx has two types that satisfy the Spanner interface; ImgSpanner and CompressSpanner.
