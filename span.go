@@ -9,7 +9,12 @@ import (
 	"github.com/srwiley/rasterx"
 )
 
-const m = 1<<16 - 1
+const (
+	m         = 1<<16 - 1
+	mp        = 0x100 * m
+	pa uint32 = 0x101
+	q  uint32 = 0xFF00
+)
 
 type (
 	spanCell struct {
@@ -25,12 +30,14 @@ type (
 		fgColor color.RGBA
 	}
 
-	// CompressSpanner is a Spanner that draws Spans onto a draw.Image
+	// LinkListSpanner is a Spanner that draws Spans onto a draw.Image
 	// interface satisfying struct but it is optimized for *xgraphics.Image
 	// and *image.RGBA image types
 	// It uses a solid Color only for fg and bg and does not support a color function
-	// used by gradients.
-	CompressSpanner struct {
+	// used by gradients. Spans are accumulated into a set of linked lists, one for
+	// every horizontal line in the image. After the spans for the image are accumulated,
+	// use the DrawToImage function to write the spans to an image.
+	LinkListSpanner struct {
 		baseSpanner
 		spans        []spanCell
 		bgColor      color.RGBA
@@ -54,7 +61,7 @@ type (
 )
 
 //Clear clears the current spans
-func (x *CompressSpanner) Clear() {
+func (x *LinkListSpanner) Clear() {
 	x.lastY, x.lastP = 0, 0
 	x.spans = x.spans[0:0]
 	width := x.bounds.Dy()
@@ -67,7 +74,7 @@ func (x *CompressSpanner) Clear() {
 	}
 }
 
-func (x *CompressSpanner) spansToImage(img draw.Image) {
+func (x *LinkListSpanner) spansToImage(img draw.Image) {
 	for y := 0; y < x.bounds.Dy(); y++ {
 		p := x.spans[y].next
 		for p != 0 {
@@ -82,7 +89,7 @@ func (x *CompressSpanner) spansToImage(img draw.Image) {
 	}
 }
 
-func (x *CompressSpanner) spansToPix(pix []uint8, stride int, xpixel bool) {
+func (x *LinkListSpanner) spansToPix(pix []uint8, stride int, xpixel bool) {
 	for y := 0; y < x.bounds.Dy(); y++ {
 		yo := y * stride
 		p := x.spans[y].next
@@ -106,7 +113,7 @@ func (x *CompressSpanner) spansToPix(pix []uint8, stride int, xpixel bool) {
 }
 
 //DrawToImage draws the accumulated y spans onto the img
-func (x *CompressSpanner) DrawToImage(img image.Image) {
+func (x *LinkListSpanner) DrawToImage(img image.Image) {
 	switch img := img.(type) {
 	case *xgraphics.Image:
 		x.spansToPix(img.Pix, img.Stride, true)
@@ -118,7 +125,7 @@ func (x *CompressSpanner) DrawToImage(img image.Image) {
 }
 
 // SetBounds sets the spanner boundaries
-func (x *CompressSpanner) SetBounds(bounds image.Rectangle) {
+func (x *LinkListSpanner) SetBounds(bounds image.Rectangle) {
 	x.bounds = bounds
 	x.Clear()
 }
@@ -136,7 +143,7 @@ func getColorRGBA(c interface{}) (rgba color.RGBA) {
 	return
 }
 
-func (x *CompressSpanner) blendColor(under color.RGBA, ma uint32) color.RGBA {
+func (x *LinkListSpanner) blendColor(under color.RGBA, ma uint32) color.RGBA {
 	if ma == 0 {
 		return under
 	}
@@ -146,21 +153,21 @@ func (x *CompressSpanner) blendColor(under color.RGBA, ma uint32) color.RGBA {
 	ama := uint32(x.fgColor.A) * ma
 	if x.Op != draw.Over || under.A == 0 || ama == m*0xFF {
 		return color.RGBA{
-			uint8(rma / 0xFF00),
-			uint8(gma / 0xFF00),
-			uint8(bma / 0xFF00),
-			uint8(ama / 0xFF00)}
+			uint8(rma / q),
+			uint8(gma / q),
+			uint8(bma / q),
+			uint8(ama / q)}
 	}
 	a := m - (ama / (m >> 8))
 	cc := color.RGBA{
-		uint8((uint32(under.R)*a + rma) / 0xFF00),
-		uint8((uint32(under.G)*a + gma) / 0xFF00),
-		uint8((uint32(under.B)*a + bma) / 0xFF00),
-		uint8((uint32(under.A)*a + ama) / 0xFF00)}
+		uint8((uint32(under.R)*a + rma) / q),
+		uint8((uint32(under.G)*a + gma) / q),
+		uint8((uint32(under.B)*a + bma) / q),
+		uint8((uint32(under.A)*a + ama) / q)}
 	return cc
 }
 
-func (x *CompressSpanner) addLink(x0, x1, next, pp int, underColor color.RGBA, alpha uint32) (p int) {
+func (x *LinkListSpanner) addLink(x0, x1, next, pp int, underColor color.RGBA, alpha uint32) (p int) {
 	clr := x.blendColor(underColor, alpha)
 	if pp >= x.bounds.Dy() && x.spans[pp].x1 >= x0 && ((clr.A == 0 && x.spans[pp].clr.A == 0) || clr == x.spans[pp].clr) {
 		// Just extend the prev span; a new one is not required
@@ -174,13 +181,15 @@ func (x *CompressSpanner) addLink(x0, x1, next, pp int, underColor color.RGBA, a
 }
 
 // GetSpanFunc returns the function that consumes a span described by the parameters.
-func (x *CompressSpanner) GetSpanFunc() SpanFunc {
+func (x *LinkListSpanner) GetSpanFunc() SpanFunc {
+	x.lastY = -1 // x within a y list may no longer be ordered, so this ensures a reset.
 	return x.SpanOver
 }
 
-//SpanOver adds the span into an array of linked lists of spans using the fgColor and Porter-Duff composition
-// ma is the accumulated alpha coverage.
-func (x *CompressSpanner) SpanOver(yi, xi0, xi1 int, ma uint32) {
+// SpanOver adds the span into an array of linked lists of spans using the fgColor and Porter-Duff composition
+// ma is the accumulated alpha coverage. This function also assumes usage sorted x inputs for each y and so if
+// inputs for x in y are not monotonically increasing, then lastY should be set to -1.
+func (x *LinkListSpanner) SpanOver(yi, xi0, xi1 int, ma uint32) {
 	if yi != x.lastY { // If the y place has changed, start at the list beginning
 		x.lastP = yi
 		x.lastY = yi
@@ -214,8 +223,8 @@ func (x *CompressSpanner) SpanOver(yi, xi0, xi1 int, ma uint32) {
 			if x.spans[pp].x1 >= xi0 && sameClrs {
 				x.spans[pp].x1 = xi1
 				x.spans[pp].next = sp.next
-				// Suffices not to advance lastP ?!? Testing says yes.
-				//x.lastP = yi //We need to go back, so let's just go to start of the list next time
+				// Suffices not to advance lastP ?!? Testing says NO!
+				x.lastP = yi // We need to go back, so let's just go to start of the list next time
 				p = pp
 			} else {
 				// middle span; replaces sp
@@ -245,12 +254,12 @@ func (x *CompressSpanner) SpanOver(yi, xi0, xi1 int, ma uint32) {
 }
 
 // SetBgColor sets the background color for blending
-func (x *CompressSpanner) SetBgColor(c interface{}) {
+func (x *LinkListSpanner) SetBgColor(c interface{}) {
 	x.bgColor = getColorRGBA(c)
 }
 
 // SetColor sets the color of x if it is a color.Color and ignores a rasterx.ColorFunction
-func (x *CompressSpanner) SetColor(c interface{}) {
+func (x *LinkListSpanner) SetColor(c interface{}) {
 	x.fgColor = getColorRGBA(c)
 }
 
@@ -329,10 +338,10 @@ func (x *ImgSpanner) SpanColorFuncR(yi, xi0, xi1 int, ma uint32) {
 			rcr, rcb = rcb, rcr
 		}
 		cx++
-		x.pix[i+0] = uint8(rcr * ma / (m * 0x100))
-		x.pix[i+1] = uint8(rcg * ma / (m * 0x100))
-		x.pix[i+2] = uint8(rcb * ma / (m * 0x100))
-		x.pix[i+3] = uint8(rca * ma / (m * 0x100))
+		x.pix[i+0] = uint8(rcr * ma / mp)
+		x.pix[i+1] = uint8(rcg * ma / mp)
+		x.pix[i+2] = uint8(rcb * ma / mp)
+		x.pix[i+3] = uint8(rca * ma / mp)
 	}
 }
 
@@ -341,10 +350,10 @@ func (x *ImgSpanner) SpanFgColorR(yi, xi0, xi1 int, ma uint32) {
 	i0 := (yi)*x.stride + (xi0)*4
 	i1 := i0 + (xi1-xi0)*4
 	cr, cg, cb, ca := x.fgColor.RGBA()
-	rma := uint8(cr * ma / (m * 0x100))
-	gma := uint8(cg * ma / (m * 0x100))
-	bma := uint8(cb * ma / (m * 0x100))
-	ama := uint8(ca * ma / (m * 0x100))
+	rma := uint8(cr * ma / mp)
+	gma := uint8(cg * ma / mp)
+	bma := uint8(cb * ma / mp)
+	ama := uint8(ca * ma / mp)
 	for i := i0; i < i1; i += 4 {
 		x.pix[i+0] = rma
 		x.pix[i+1] = gma
@@ -366,15 +375,15 @@ func (x *ImgSpanner) SpanColorFunc(yi, xi0, xi1 int, ma uint32) {
 			rcr, rcb = rcb, rcr
 		}
 		cx++
-		a := (m - (rca * ma / m)) * 0x101
+		a := (m - (rca * ma / m)) * pa
 		dr := uint32(x.pix[i+0])
 		dg := uint32(x.pix[i+1])
 		db := uint32(x.pix[i+2])
 		da := uint32(x.pix[i+3])
-		x.pix[i+0] = uint8((dr*a + rcr*ma) / (m * 0x100))
-		x.pix[i+1] = uint8((dg*a + rcg*ma) / (m * 0x100))
-		x.pix[i+2] = uint8((db*a + rcb*ma) / (m * 0x100))
-		x.pix[i+3] = uint8((da*a + rca*ma) / (m * 0x100))
+		x.pix[i+0] = uint8((dr*a + rcr*ma) / mp)
+		x.pix[i+1] = uint8((dg*a + rcg*ma) / mp)
+		x.pix[i+2] = uint8((db*a + rcb*ma) / mp)
+		x.pix[i+3] = uint8((da*a + rca*ma) / mp)
 	}
 }
 
@@ -386,10 +395,10 @@ func (x *ImgSpanner) SpanFgColor(yi, xi0, xi1 int, ma uint32) {
 	cr, cg, cb, ca := x.fgColor.RGBA()
 	ama := ca * ma
 	if ama == 0xFFFF*0xFFFF { // undercolor is ignored
-		rmb := uint8(cr * ma / (m * 0x100))
-		gmb := uint8(cg * ma / (m * 0x100))
-		bmb := uint8(cb * ma / (m * 0x100))
-		amb := uint8(ama / (m * 0x100))
+		rmb := uint8(cr * ma / mp)
+		gmb := uint8(cg * ma / mp)
+		bmb := uint8(cb * ma / mp)
+		amb := uint8(ama / mp)
 		for i := i0; i < i1; i += 4 {
 			x.pix[i+0] = rmb
 			x.pix[i+1] = gmb
@@ -401,11 +410,11 @@ func (x *ImgSpanner) SpanFgColor(yi, xi0, xi1 int, ma uint32) {
 	rma := cr * ma
 	gma := cg * ma
 	bma := cb * ma
-	a := (m - (ama / m)) * 0x101
+	a := (m - (ama / m)) * pa
 	for i := i0; i < i1; i += 4 {
-		x.pix[i+0] = uint8((uint32(x.pix[i+0])*a + rma) / (m * 0x100))
-		x.pix[i+1] = uint8((uint32(x.pix[i+1])*a + gma) / (m * 0x100))
-		x.pix[i+2] = uint8((uint32(x.pix[i+2])*a + bma) / (m * 0x100))
-		x.pix[i+3] = uint8((uint32(x.pix[i+3])*a + ama) / (m * 0x100))
+		x.pix[i+0] = uint8((uint32(x.pix[i+0])*a + rma) / mp)
+		x.pix[i+1] = uint8((uint32(x.pix[i+1])*a + gma) / mp)
+		x.pix[i+2] = uint8((uint32(x.pix[i+2])*a + bma) / mp)
+		x.pix[i+3] = uint8((uint32(x.pix[i+3])*a + ama) / mp)
 	}
 }

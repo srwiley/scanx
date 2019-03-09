@@ -1,7 +1,6 @@
 // 2018: This is the anti-aliasing algorithym from the golang
-// translation of FreeType. It has been adapted for use by the rasterx package
-// which can use either this for the scanner component or a scanner based on
-// the golang.org/x/image/vector package.
+// translation of FreeType. It has been adapted for use by the scanx package
+// which replaces the painter interface with the spanner interface.
 //__
 // Copyright 2010 The Freetype-Go Authors. All rights reserved.
 // Use of this source code is governed by your choice of either the
