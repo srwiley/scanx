@@ -34,7 +34,7 @@ spanner.DrawToImage(img)
 spanner.Clear()
 ``` 
 # Test results in comparison to scanFT and scanGV
-Images for the svg files in the test folder have all been generated and compared pixel for pixel using ScanFT, ImgSpanner and LinkListSpanner. ImgSpanner and LinkListSpanner generated images are all identical except in the case of gradients, which LinkListSpanner does not at this time support. ScanFT will differ from ImgScanner and LinkList spanner in some pixel values, usually by one digit, but in cases with multiple semitransparent overlays the effect can be cummulative. The highest difference in the data set is found in the randcurves.svg file, where for some pixels the total difference is 4, although it is hard to see any difference visually.
+Images for the svg files in the test folder have all been generated and compared pixel for pixel using ScanFT, ImgSpanner and LinkListSpanner. ImgSpanner and LinkListSpanner generated images are all identical except in the case of gradients, which LinkListSpanner does not at this time support. ScanFT will differ from ImgScanner and LinkList spanner in some pixel values, usually by one digit, but in cases with multiple semitransparent overlays the effect can be cummulative. The highest difference in the data set is found in the randspot.svg file, where for some pixels the total difference is 4, although it is hard to see any difference visually.
 
 Below are benchmark results using files in test/lanscapeIcons and the indicated spanner or scanner. They are draw at 0.5, 1, 5, and 15 times native resolution.
 
@@ -67,4 +67,4 @@ BenchmarkImgSpanner150-16         	       1	4173881468 ns/op	 5826384 B/op	     
 BenchmarkFTScanner150-16          	       1	10811718931 ns/op	 2788336 B/op	     325 allocs/op
 BenchmarkGVScanner150-16          	       1	250690083743 ns/op	235934720 B/op	     327 allocs/op
 ```
-The results indicate the ImgScanner is consistently better than scanFT or scanGV. Also LinkListSpanner usually does better with this data set as size of the graphic increases. 
+The results indicate the ImgScanner is consistently faster than scanFT or scanGV. Also LinkListSpanner usually does better with this data set as size of the graphic increases. Also note that some svg files can perform quite badly using the LinkListSpanner, such as rl.svg in the testdata/svg folder. This file consists of lots of random lines that slow the list generation.
